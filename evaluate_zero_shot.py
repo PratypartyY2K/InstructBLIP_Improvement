@@ -38,7 +38,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 def download_karpathy_json(save_path):
     """Downloads the Karpathy split JSON if it does not exist."""
     url = "https://github.com/Delphboy/karpathy-splits/raw/main/dataset_flickr8k.json"
-    print(f"Downloading Karpathy Split JSON to {save_path}...")
+    print(f"Downloading Karpathy Split JSON to {save_path}")
     response = requests.get(url)
     with open(save_path, 'wb') as f:
         f.write(response.content)
@@ -46,7 +46,7 @@ def download_karpathy_json(save_path):
 
 def load_model():
     """Loads the InstructBLIP model and processor."""
-    print(f"Loading Model: {MODEL_ID}. This may take a while...")
+    print(f"Loading Model: {MODEL_ID}")
     processor = InstructBlipProcessor.from_pretrained(MODEL_ID)
     model = InstructBlipForConditionalGeneration.from_pretrained(
         MODEL_ID,
@@ -71,7 +71,7 @@ def generate_caption(model, processor, image):
         outputs = model.generate(
             **inputs,
             num_beams=5,
-            max_new_tokens=30,     # Limit verbosity
+            max_new_tokens=30,
             min_length=8,
             repetition_penalty=1.5,
             length_penalty=1.0,
@@ -93,9 +93,9 @@ def compute_metrics(gts, res):
         score, _ = scorer.compute_score(gts, res)
         if isinstance(method, list):
             for m, s in zip(method, score):
-                print(f"{m}: {s*100:.2f}") # Format as percentage
+                print(f"{m}: {s*100:.2f}")
         else:
-            print(f"{method}: {score*100:.2f}") # Format as percentage
+            print(f"{method}: {score*100:.2f}")
 
 def main():
     # 1. Setup Data
