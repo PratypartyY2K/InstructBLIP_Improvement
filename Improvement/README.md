@@ -36,6 +36,15 @@ python evaluate.py \
   --adapter_path ./final_adapter
 ```
 
+Run the training script
+```bash
+python train.py \
+  --image_dir /storage/flickr8k_data/Images \
+  --caption_file /storage/flickr8k_data/captions.txt \
+  --output_dir ./my_model_output \
+  --epochs 3
+  ```
+
 ## Methodology
 
 * **Model:** InstructBLIP (Vicuna-7b backbone)
