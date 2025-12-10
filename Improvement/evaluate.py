@@ -1,11 +1,8 @@
 """
-InstructBLIP Evaluation Script for Flickr8k
--------------------------------------------
-Evaluates a fine-tuned LoRA adapter for InstructBLIP on the Flickr8k dataset.
-Computes BLEU-4, CIDEr, and ROUGE-L scores using standard COCO evaluation tools.
-
-Usage:
-    python evaluate.py --image_dir /path/to/images --caption_file /path/to/captions.txt --adapter_path ./final_adapter
+InstructBLIP Evaluation Script for Flickr8k (Patched)
+-----------------------------------------------------
+Includes a 'monkey patch' for bitsandbytes to fix compatibility issues
+with loading LoRA adapters that have no bias terms.
 """
 
 import argparse
@@ -14,7 +11,8 @@ import os
 import torch
 import pandas as pd
 from PIL import Image
-from tqdm import tqdm
+# Use safe tqdm to prevent widget errors
+from tqdm import tqdm 
 from torch.utils.data import Dataset
 from transformers import (
     InstructBlipProcessor, 
@@ -24,28 +22,48 @@ from transformers import (
 from peft import PeftModel
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
-
-# Suppress warnings for cleaner output
+import bitsandbytes as bnb
+from bitsandbytes.nn import Linear4bit
 import warnings
+
 warnings.filterwarnings("ignore")
 
+# 1. PATCH for loading crashes with bitsandbytes
+def safe_load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+    # A. Handle Bias safely (Fixes 'NoneType' error)
+    if self.bias is not None:
+        bias_name = prefix + "bias"
+        if bias_name in state_dict:
+            bias_data = state_dict.pop(bias_name, None)
+            if bias_data is not None:
+                self.bias.data = bias_data.to(self.bias.data.device)
 
+    # B. Handle Weights safely (Fixes 'KeyError')
+    weight_name = prefix + "weight"
+    # Only try to load weights if they exist in the file
+    if weight_name in state_dict:
+        self.weight, state_dict = bnb.nn.Params4bit.from_state_dict(
+            state_dict, prefix=weight_name + ".", requires_grad=False
+        )
+    
+    # C. Cleanup
+    unexpected_keys.extend(state_dict.keys())
+
+# Apply the patch immediately on import
+Linear4bit._load_from_state_dict = safe_load_from_state_dict
+print("bitsandbytes patch applied.")
+
+
+# 2. DATASET CLASS
 class Flickr8kEvalDataset(Dataset):
-    """
-    Custom Dataset for Flickr8k Evaluation.
-    Returns raw image paths and reference captions (List[str]) instead of tensors.
-    """
     def __init__(self, image_dir, caption_file, split="test"):
         self.image_dir = image_dir
         
-        # Load and normalize CSV headers
         df = pd.read_csv(caption_file)
-        df.columns = map(str.lower, df.columns) 
+        df.columns = map(str.lower, df.columns)
         
-        # Group by Image (1 image : List of 5 captions)
         self.grouped = df.groupby('image')['caption'].apply(list).reset_index()
         
-        # Karpathy Split Logic
         unique_images = self.grouped['image'].tolist()
         if split == "train":
             target_imgs = unique_images[:6000]
@@ -62,14 +80,13 @@ class Flickr8kEvalDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
         image_name = row['image']
-        references = row['caption'] # List of 5 strings
+        references = row['caption']
         image_path = os.path.join(self.image_dir, image_name)
-        
         return image_name, image_path, references
 
 
+# 3. MAIN EVALUATION LOGIC
 def main(args):
-    # 1. Setup Device & Quantization
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
@@ -80,43 +97,38 @@ def main(args):
         bnb_4bit_use_double_quant=True
     )
 
-    # 2. Load Base Model & Processor
+    print("Loading base model...")
     model_id = "Salesforce/instructblip-vicuna-7b"
-    print(f"Loading base model: {model_id}...")
-    
-    # use_fast=False fixes tokenizer crash on Vicuna
     processor = InstructBlipProcessor.from_pretrained(model_id, use_fast=False)
     
     base_model = InstructBlipForConditionalGeneration.from_pretrained(
         model_id,
         quantization_config=quant_config,
-        device_map={"": torch.cuda.current_device()} # Fixes 'different device' error
+        device_map={"": torch.cuda.current_device()}
     )
 
-    # 3. Load LoRA Adapter
-    print(f"Loading LoRA adapter from {args.adapter_path}...")
+    print(f"Loading adapter from {args.adapter_path}...")
+    # The patch applied above makes this line safe
     model = PeftModel.from_pretrained(base_model, args.adapter_path)
     model.eval()
 
-    # 4. Load Dataset
-    print(f"Loading Test Split from {args.image_dir}...")
+    print(f"Loading dataset from {args.image_dir}...")
     eval_dataset = Flickr8kEvalDataset(args.image_dir, args.caption_file, split="test")
 
-    # 5. Generation Loop
     results = []
     ground_truth = {}
     
     print(f"Starting evaluation on {len(eval_dataset)} images...")
     
-    # Create output directory for JSONs
-    os.makedirs("results", exist_ok=True)
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    for image_name, image_path, refs in tqdm(eval_dataset):
+    # Use ascii=True to prevent widget errors
+    for image_name, image_path, refs in tqdm(eval_dataset, ascii=True, desc="Eval"):
         try:
             image = Image.open(image_path).convert("RGB")
             
-            # Note: Prompt matches training prompt
-            prompt = "Describe this image." 
+            prompt = "Describe this image."
             inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
 
             with torch.no_grad():
@@ -132,24 +144,17 @@ def main(args):
             
             caption = processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
 
-            # Hash image name to create a unique integer ID for COCO tools
-            img_id = abs(hash(image_name)) 
-            
-            results.append({
-                "image_id": img_id,
-                "caption": caption
-            })
-            
+            img_id = abs(hash(image_name))
+            results.append({"image_id": img_id, "caption": caption})
             ground_truth[img_id] = refs
             
         except Exception as e:
             print(f"Error processing {image_name}: {e}")
 
-    # 6. Format for COCO Eval Tools
+    # Formatting and Saving
     coco_gen_format = results
     coco_ref_format = {
-        "info": {},
-        "licenses": [],
+        "info": {}, "licenses": [],
         "images": [{"id": k} for k in ground_truth.keys()],
         "annotations": []
     }
@@ -164,26 +169,21 @@ def main(args):
             })
             ann_id += 1
 
-    # Save temp files
-    pred_file = "results/flickr8k_preds.json"
-    ref_file = "results/flickr8k_refs.json"
+    pred_file = os.path.join(args.output_dir, "flickr8k_preds.json")
+    ref_file = os.path.join(args.output_dir, "flickr8k_refs.json")
     
-    with open(pred_file, "w") as f:
-        json.dump(coco_gen_format, f)
-    with open(ref_file, "w") as f:
-        json.dump(coco_ref_format, f)
+    with open(pred_file, "w") as f: json.dump(coco_gen_format, f)
+    with open(ref_file, "w") as f: json.dump(coco_ref_format, f)
 
-    # 7. Compute Scores
+    # Calculate Scores
     coco = COCO(ref_file)
     coco_res = coco.loadRes(pred_file)
-    
     coco_eval = COCOEvalCap(coco, coco_res)
     coco_eval.params['image_id'] = coco_res.getImgIds()
     coco_eval.evaluate()
 
-    # 8. Print Final Metrics
     print("\n" + "="*40)
-    print("FINAL SCORES (Flickr8k Test Split)")
+    print("FINAL SCORES")
     print("="*40)
     for metric, score in coco_eval.eval.items():
         if metric in ["Bleu_4", "CIDEr", "ROUGE_L"]:
@@ -192,10 +192,11 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate InstructBLIP on Flickr8k")
-    parser.add_argument("--image_dir", type=str, required=True, help="Path to Flickr8k images folder")
-    parser.add_argument("--caption_file", type=str, required=True, help="Path to captions.txt")
-    parser.add_argument("--adapter_path", type=str, default="./final_adapter", help="Path to trained LoRA adapter")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image_dir", type=str, required=True)
+    parser.add_argument("--caption_file", type=str, required=True)
+    parser.add_argument("--adapter_path", type=str, default="./final_adapter")
+    parser.add_argument("--output_dir", type=str, default="results")
     
     args = parser.parse_args()
     main(args)
