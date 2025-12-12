@@ -25,7 +25,7 @@ from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 
 # --- CONFIGURATION ---
-# Path to the Flickr8k 'Images' folder
+# Path to the Flickr8k 'Images' folder (edit for your environment)
 IMAGES_DIR = '/content/drive/MyDrive/flickr8k_dataset/Images' 
 
 # Path to the Karpathy JSON split file

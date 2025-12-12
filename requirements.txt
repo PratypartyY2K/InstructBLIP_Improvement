@@ -1,0 +1,11 @@
+torch>=2.0.0
+transformers==4.37.2
+peft==0.8.2
+bitsandbytes==0.42.0
+accelerate==0.27.2
+pandas>=2.0.0
+Pillow>=9.0.0
+tqdm>=4.65.0
+pycocotools>=2.0.7
+pycocoevalcap
+requests>=2.31.0

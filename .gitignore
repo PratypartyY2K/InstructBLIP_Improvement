@@ -1,0 +1,29 @@
+# OS / IDE clutter
+.DS_Store
+.idea/
+.vscode/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+*.env
+
+# Training outputs
+adapters/
+results*/
+checkpoints/
+*.pt
+*.bin
+*.safetensors

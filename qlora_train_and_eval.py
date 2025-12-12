@@ -93,6 +93,7 @@ class Flickr8kDataset(Dataset):
         try:
             image = Image.open(img_path).convert("RGB")
         except:
+            # Returning None lets the collate_fn drop corrupted/missing samples gracefully.
             return None 
 
         # Flickr8k has 5 captions; first one for training stability is picked
@@ -134,6 +135,7 @@ class Flickr8kDataset(Dataset):
 
 def collate_fn(batch):
     batch = [b for b in batch if b is not None]
+    # Default collator handles padding now that each sample has identical keys.
     return torch.utils.data.dataloader.default_collate(batch)
 
 # Training Pipeline
